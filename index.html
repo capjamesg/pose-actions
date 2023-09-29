@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        #video {
+            position: absolute;
+            z-index: -1;
+        }
+        #canvas {
+            position: absolute;
+        }
+        #message {
+            font-size: 100px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <p id="message"></p>
+    <script>
+        // create video
+        const video = document.getElementById('video');
+
+        const HEAD_KEYPOINTS = [
+            "nose",
+            "left_eye",
+            "right_eye",
+            "left_ear",
+            "right_ear,"
+        ];
+
+        var head_keypoint_buffer = [];
+        var right_wrist_buffer = [];
+        var left_wrist_buffer = [];
+
+        var message = document.getElementById('message');
+
+        var is_in_nod = false;
+        var is_in_right_wrist = false;
+
+        function get_average(arr) {
+            var sum = 0;
+
+            for (var i = 0; i < arr.length; i++) {
+                sum += arr[i];
+            }
+
+            return sum / arr.length;
+        }
+
+        function get_average_by_keypoint (frames) {
+            var avg_y = 0;
+            for (var i = 0; i < frames.length; i++) {
+                var frame = frames[i];
+                var avg_y_frame = 0;
+
+                for (var j = 0; j < frame.length; j++) {
+                    avg_y_frame += frame[j].y;
+                }
+
+                avg_y_frame /= frame.length;
+                avg_y += avg_y_frame;
+            }
+
+            return avg_y / frames.length;
+        }
+
+        function check_for_wrist_movement (wrist_pose_y, canvas, buffer, action = "right") {
+            if (wrist_pose_y < 0.9 * canvas.height) {
+                console.log("Right wrist is up 1");
+
+                // if right wrist has been up for 10 frames, clear buffer
+                var avg_y = get_average(buffer);
+
+                var last_10_ys = buffer.slice(-25);
+
+                var avg_last_10_ys = get_average(last_10_ys);
+
+                if (avg_last_10_ys < avg_y && buffer.length > 50) {
+                    console.log("Right wrist is moving up");
+                    // if up by 10%
+                    if (Math.abs(avg_y - avg_last_10_ys) > 0.1 * avg_y) {
+                        var emoji =  action == "right" ? "👉" : "👈";
+                        message.innerHTML += emoji;
+                        buffer = [];
+                    }
+                }
+            }
+
+            if (buffer.length > 200) {
+                buffer.shift();
+            }
+
+            return buffer;
+        }
+
+        async function drawPoses(poses) {
+            // get canvas
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            // clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // draw each pose
+            poses.forEach((pose) => {
+                // if right wrist y in top 90% of page
+                console.log(pose.keypoints[10].y);
+                right_wrist_buffer.push(pose.keypoints[10].y);
+                left_wrist_buffer.push(pose.keypoints[9].y);
+
+                right_wrist_buffer = check_for_wrist_movement(pose.keypoints[10].y, canvas, right_wrist_buffer, "right");
+                left_wrist_buffer = check_for_wrist_movement(pose.keypoints[9].y, canvas, left_wrist_buffer, "left");
+
+                if (head_keypoint_buffer.length > 10) {
+                    // if last 5 ys are more than 20% different than the first 5, clear buffer
+                    var first_5_ys = [];
+
+                    for (var i = 0; i < 5; i++) {
+                        first_5_ys.push(head_keypoint_buffer[i][0].y);
+                    }
+
+                    var last_5_ys = [];
+
+                    for (var i = 0; i < 5; i++) {
+                        last_5_ys.push(head_keypoint_buffer[head_keypoint_buffer.length - 1 - i][0].y);
+                    }
+
+                    var avg_first_5_ys = get_average(first_5_ys);
+                    var avg_last_5_ys = get_average(last_5_ys);
+
+                    if (Math.abs(avg_first_5_ys - avg_last_5_ys) > 0.3 * avg_first_5_ys) {
+                        console.log("Clearing buffer");
+                        head_keypoint_buffer = [];
+                    }
+                }
+
+                // if is in nod, print "nodded" then reset
+                if (is_in_nod) {
+                    console.log("Nodded");
+                    is_in_nod = false;
+                    head_keypoint_buffer = [];
+                    message.innerHTML += "🪄";
+                }
+
+                // append 0 to 4 keypoints to buffer
+                head_keypoint_buffer.push(pose.keypoints.slice(0, 4));
+
+                if (head_keypoint_buffer.length > 200) {
+                    head_keypoint_buffer.shift();
+                }
+
+                // detect if avg. pairwise in last 10 is lower than previous avg
+                var most_recent_10_frames = head_keypoint_buffer.slice(-10);
+
+                // if avg y is less in last 10 frames than previous 10 frames
+                var avg_y = get_average_by_keypoint(most_recent_10_frames);
+                var avg_y_prev = get_average_by_keypoint(head_keypoint_buffer.slice(-20, -10));
+
+                // if avgs are too close together, ignore
+                if (Math.abs(avg_y - avg_y_prev) < 5) {
+                    return;
+                }
+
+                if (avg_y > avg_y_prev && head_keypoint_buffer.length > 50) {
+                    console.log("Head is moving down");
+                } else if (avg_y < avg_y_prev && head_keypoint_buffer.length > 50) {
+                    console.log("Head is moving up");
+                    is_in_nod = true;
+                }
+
+                pose.keypoints.forEach((keypoint) => {
+                    // draw point
+                    ctx.beginPath();
+                    ctx.arc(keypoint.x, keypoint.y, 5, 0, 2 * Math.PI);
+                    ctx.fillStyle = 'red';
+                    ctx.fill();
+                    // draw text
+                    ctx.font = '20px Arial';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(`${keypoint.name}`, keypoint.x + 10, keypoint.y + 10);
+                });
+            });
+        }
+
+        async function loadPoses(detector) {
+            requestAnimationFrame(async () => {
+                const poses = await detector.estimatePoses(video);
+                // draw poses
+                drawPoses(poses);
+                // request animation
+                requestAnimationFrame(() => {
+                    loadPoses(detector);
+                });
+            });
+        }
+
+        let detector;
+
+        async function initPoseDetector() {
+            detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet);
+            // Once initialized, get access to the webcam
+            navigator.mediaDevices.getUserMedia({
+                video: true
+            }).then((stream) => {
+                video.srcObject = stream;
+                video.height = 480;
+                video.width = 640;
+                // wait for video load
+                video.addEventListener('loadeddata', () => {
+                    loadPoses(detector);
+                });
+            });
+        }
+
+        // Call the initialization function
+        initPoseDetector();
+    </script>
+</body>
+</html>
