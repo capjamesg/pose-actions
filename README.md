@@ -9,7 +9,7 @@ https://github.com/capjamesg/pose-actions/assets/37276661/651cdd04-8297-427e-9b5
 First, clone the project repository:
 
 ```
-git clone https://github.com/capjamesg/hand-pose-detection
+git clone https://github.com/capjamesg/pose-actions
 ```
 
 Then, open the `index.html` file in your browser.
